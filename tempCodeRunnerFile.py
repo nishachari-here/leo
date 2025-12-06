@@ -3,12 +3,12 @@ import csv
 import matplotlib.pyplot as plt
 from skyfield.api import load, wgs84, EarthSatellite
 from skyfield.iokit import parse_tle_file
+import plotly.graph_objects as go
 max_days = 7  # Maximum age of TLE data in days
 
 def get_satellite_data(num_sats=None, url=None, csv_file=None):
     ts = load.timescale()
 
-    # Load the Starlink TLEs directly from CelesTrak
     if csv_file is not None:
 
         if not load.exists(csv_file) or load.days_old(csv_file) >= max_days:
@@ -16,8 +16,6 @@ def get_satellite_data(num_sats=None, url=None, csv_file=None):
         # Load from a CSV file
         with load.open(csv_file, mode='r') as f:
             data = list(csv.DictReader(f))
-
-
         satellites = [EarthSatellite.from_omm(ts, fields) for fields in data]
     if num_sats > len(satellites) or num_sats <= 0 or num_sats is None:
         print(f"Requested {num_sats} satellites, but only {len(satellites)} available. Using all available satellites.")
@@ -47,44 +45,49 @@ def calculate_positions(satellites, t):
         
     return lats, lons, t
 
-def plot_map(lats, lons, time_obj):
-    plt.figure(figsize=(12, 6))
-    
-    # 1. Plot the satellites
-    # 'zorder=2' ensures they are drawn on top of grid lines
-    plt.scatter(lons, lats, color='red', s=10, label='Satellites', zorder=2)
-    
-    # 2. Add Background & Formatting (Simulating a World Map)
-    # Load a stock background image if you have one, otherwise use a grid
-    # To add a real map image, uncomment the next two lines and ensure 'map.png' exists:
-    # img = plt.imread("map.png")
-    # plt.imshow(img, extent=[-180, 180, -90, 90])
 
-    plt.title(f'Starlink Constellation Sample (100 Nodes)\n{time_obj.utc_strftime("%Y-%m-%d %H:%M:%S UTC")}')
-    plt.xlabel('Longitude (Degrees)')
-    plt.ylabel('Latitude (Degrees)')
-    
-    # Set limits to represent the whole Earth
-    plt.xlim(-180, 180)
-    plt.ylim(-90, 90)
-    
-    # Add a grid to represent lat/lon lines
-    plt.grid(True, linestyle='--', alpha=0.5, zorder=1)
-    plt.axhline(0, color='black', linewidth=0.8) # Equator
-    plt.axvline(0, color='black', linewidth=0.8) # Prime Meridian
-    
-    plt.legend(loc='upper right')
-    plt.tight_layout()
-    plt.show()
+def vis_sat_path(satellites, dur, data_points):
+    t=load.timescale().now()
+   
+  
+    scatter_traces = []
+    for i, sat in enumerate(satellites):
+                sat_positions = []
+                for ti in np.linspace(0, dur, data_points):
+                    geocentric = sat.at(t + ti)
+                    sat_positions.append(geocentric)
+                xyz_coords = [pos.xyz.km for pos in sat_positions]
+                x_coords = xyz_coords[0][:]
+                y_coords = xyz_coords[1][:]
+                z_coords = xyz_coords[2][:]
+                
+                scatter_trace = go.Scatter3d(
+                    x=x_coords,
+                    y=y_coords,
+                    z=z_coords,
+                    mode='lines+markers',
+                    marker=dict(
+                    size=3, # Reduced size for smoother lines
+                    color=i,
+                    colorscale='Viridis',
+                    opacity=0.8
+                    ),
+                    line=dict(
+                        width=3,
+                        color=i,
+                        colorscale='Viridis',
+                    ),
+                    name=f'Satellite {i}'
+                )
+                scatter_traces.append(scatter_trace)
 
+    fig = go.Figure(data=scatter_traces)
+    fig.show()
+   
+            
 if __name__ == "__main__":
     # 1. Get Data
-    my_sats = get_satellite_data(100, url="https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=csv", csv_file="starlink.csv")
+    sats = get_satellite_data(100, url="https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=csv", csv_file="starlink.csv")
+    my_sats = sats[:10]
     
-    # 2. Process Physics
-    ts = load.timescale()
-    current_time = ts.now()
-    latitudes, longitudes, current_time = calculate_positions(my_sats, current_time)
-    
-    # 3. Visualize
-    plot_map(latitudes, longitudes, current_time)
+    vis_sat_path(my_sats, dur=3600*24, data_points=15000)
