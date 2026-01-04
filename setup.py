@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 from skyfield.api import load, wgs84, EarthSatellite
 from skyfield.iokit import parse_tle_file
 import plotly.graph_objects as go
+import csv
+import math
+from datetime import datetime, timezone
 max_days = 7  # Maximum age of TLE data in days
 
 def get_satellite_data(num_sats=None, url=None, csv_file=None):
@@ -24,9 +27,6 @@ def get_satellite_data(num_sats=None, url=None, csv_file=None):
     print(f"Total satellites loaded: {len(satellites)} | Using subset: {len(subset)}")
     return subset
 
-import csv
-import math
-from datetime import datetime, timezone
 
 def generate_omm_csv(filename, n_planes, n_sats=None, sats_per_plane=None, 
                      inclination=53.05, altitude_km=550, phasing_f=1):

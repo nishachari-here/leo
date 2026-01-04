@@ -98,7 +98,8 @@ class TrafficModule:
                     src = flow.src,
                     dst = flow.dst,
                     size_bytes = flow.packet_size_bytes,
-                    creation_time = time
+                    creation_time = time,
+                    packet_type = PacketType.DATA
                 )
 
             self._packet_counter += 1

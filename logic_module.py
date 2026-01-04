@@ -21,9 +21,9 @@ SCALE = 1.0/6371.0
 
 @dataclass
 class LogicalConfig:
-    isl_max_km: float = 2500
-    iol_cone_deg: float = 30
-    min_elev_deg: float = 15
+    isl_max_km: float = 5000
+    iol_cone_deg: float = 60
+    min_elev_deg: float = 5
 
 LOGICAL_CONFIG = LogicalConfig()
 
@@ -162,7 +162,7 @@ class LogicalTopology:
         # UDL satellite ground links
         for n in self.nodes:
             for name, lat, lon, h in GROUND_STATIONS:
-                gs = wgs84(lat, lon, elevation_m = h)
+                gs = wgs84.latlon(lat, lon, elevation_m = h)
 
                 alt, _, _ = (n.sat - gs).at(t).altaz()
                 if alt.degrees < self.cfg.min_elev_deg:
@@ -249,3 +249,20 @@ class LogicalTopology:
         except Exception as e:
             print(f"Djikstra failed: {e}")
             return []
+    def get_gs_position(self, name, t):
+    
+    # 1. Find the GS metadata from your GROUND_STATIONS list
+        gs_metadata = next((gs for gs in GROUND_STATIONS if gs[0] == name), None)
+        if not gs_metadata:
+            raise ValueError(f"Ground Station {name} not found in configuration.")
+
+        _, lat, lon, alt = gs_metadata
+
+        # 2. Create the wgs84 geodetic object
+        gs_geodetic = wgs84.latlon(lat, lon, elevation_m=alt)
+
+        # 3. Compute the position at time 't'
+        # This converts Geodetic (Lat/Lon) -> ECI (X, Y, Z) based on Earth's rotation
+        pos_eci = gs_geodetic.at(t).position.km
+        
+        return pos_eci

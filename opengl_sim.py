@@ -13,6 +13,18 @@ EARTH_RADIUS_KM = 6371.0
 SCALE_FACTOR = 1.0 / EARTH_RADIUS_KM # 1.0 OpenGL Unit = 1 Earth Radius
 MAX_SATS = 100 # Limit to 100 satellites
 TIME_MULTIPLIER = 100.0 # 100x faster than real-time
+ISL_MAX_KM = 2500
+IOL_CONE_DEG = 30
+MIN_ELEV_DEG = 15
+
+GROUND_STATIONS = [
+    ("GS_INDIA", 28.6139, 77.2090, 0),
+    ("GS_USA", 37.7749, -122.4194, 0),
+    ("GS_BRAZIL", -23.5505, -46.6333, 0),
+    ("GS_AUSTRALIA", -33.8688, 151.2093, 0),
+    ("NP",90.0,0.0,0),
+    ("SP",-90.0,0.0,0),
+]
 
 class SatelliteSim:
     def __init__(self, satellites):
@@ -69,6 +81,59 @@ class SatelliteSim:
         for p in positions:
             glVertex3f(p[0], p[1], p[2])
         glEnd()
+
+    def draw_links(self, links, color):
+        glColor3f(*color)
+        glBegin(GL_LINES)
+        for a, b in links:
+            pa = a.sat.at(self.t).position.km * SCALE
+            pb = b.sat.at(self.t).position.km * SCALE
+            glVertex3f(pa[0], pa[2], pa[1])
+            glVertex3f(pb[0], pb[2], pb[1])
+        glEnd()
+
+    def draw_ground_links(self, udl_links, color):
+        glColor3f(*color)
+        glBegin(GL_LINES)
+        gs_dict = {name: wgs84.latlon(lat, lon, elevation_m=h) 
+                for name, lat, lon, h in GROUND_STATIONS}
+        for sat_node, gs_name in udl_links:
+            pa = sat_node.sat.at(self.t).position.km * SCALE
+            gs_pos = gs_dict[gs_name].at(self.t).position.km * SCALE
+            glVertex3f(pa[0], pa[2], pa[1])
+            glVertex3f(gs_pos[0], gs_pos[2], gs_pos[1])
+        glEnd()
+    def draw_active_route(self, path, color=(1.0, 1.0, 0.0), width=3.0):
+        
+        if not path or len(path) < 2:
+                return
+
+        glLineWidth(width)
+        glColor3f(*color)
+        
+        # Use GL_LINE_STRIP to draw a continuous line through the path
+        glBegin(GL_LINE_STRIP)
+        for name in path:
+            # Map the igraph ID back to your satellite object
+            sat_node = next((n for n in self.topology.nodes if n.sat.name == name), None)
+            if sat_node is None:
+                continue
+            p = sat_node.sat.at(self.t).position.km * SCALE
+            # Consistent coordinate mapping (X, Z, Y)
+            glVertex3f(p[0], p[2], p[1])
+        glEnd()
+        
+        # Reset line width so other links don't become thick
+        glLineWidth(1.0)
+
+    def draw_ground(self):
+        glPointSize(8)
+        glBegin(GL_POINTS)
+        glColor3f(1, 1, 0)
+        glVertex3f(0, 0, 0)
+        glEnd()
+    
+
 
     def run(self):
         # Initialize GLFW
