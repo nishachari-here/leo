@@ -9,21 +9,16 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List, Tuple, Set
 import igraph as ig
-
+from collections import deque
+from config import LogicalConfig
 #Configuration Section
 
 CSV_FILENAME = 'customconstellation.csv'
 MAX_SATS = 100
 TIME_MULTIPLIER = 100.0
-
+MAX_QUEUE_SIZE = 100
 EARTH_RADIUS = 6371.0
 SCALE = 1.0/6371.0
-
-@dataclass
-class LogicalConfig:
-    isl_max_km: float = 5000
-    iol_cone_deg: float = 60
-    min_elev_deg: float = 5
 
 LOGICAL_CONFIG = LogicalConfig()
 
@@ -78,6 +73,16 @@ class LogicalTopology:
         self.links = set()
         self.prev_links = set()
         self.last_update_time = None
+        self.node_map = {node.sat.name: node for node in self.nodes}
+        max_q = getattr(self.cfg, 'MAX_QUEUE_SIZE', 100)
+        for node in self.nodes:
+            node.queue = deque(maxlen=max_q)
+        self.gs_queues = {gs[0]: deque(maxlen=max_q) for gs in GROUND_STATIONS}
+
+    def get_node_by_id(self, node_id: str):
+        return self.node_map.get(node_id)
+    def get_queue_status(self):
+        return {node.sat.name: len(node.queue) for node in self.nodes}
 
     def _group_orbits(self, sats):
         groups = defaultdict(list)
@@ -266,3 +271,31 @@ class LogicalTopology:
         pos_eci = gs_geodetic.at(t).position.km
         
         return pos_eci
+    def get_distance(self, node_a_id, node_b_id, pos, gs_pos=None):
+        """
+        Calculates distance between any two nodes (Sat-Sat, Sat-GS, or GS-GS).
+        """
+        def resolve_pos(node_id):
+            # 1. Check if it's a Satellite by name
+            if node_id in self.node_map:
+                sat_node = self.node_map[node_id]
+                return pos.get(sat_node)
+            
+            # 2. Check if it's a Ground Station
+            if gs_pos and node_id in gs_pos:
+                return gs_pos[node_id]
+            
+            # 3. Fallback: Try to compute GS position manually
+            try:
+                return self.get_gs_position(node_id, self.last_update_time)
+            except ValueError:
+                return None
+
+        p1 = resolve_pos(node_a_id)
+        p2 = resolve_pos(node_b_id)
+
+        if p1 is None or p2 is None:
+            # This prevents the crash; if a node isn't found, distance is infinite
+            return float('inf')
+
+        return np.linalg.norm(np.array(p1) - np.array(p2))

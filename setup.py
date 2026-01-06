@@ -14,13 +14,13 @@ def get_satellite_data(num_sats=None, url=None, csv_file=None):
 
     if csv_file is not None:
 
-        if not load.exists(csv_file) or load.days_old(csv_file) >= max_days:
+        if not load.exists(csv_file): #or load.days_old(csv_file) >= max_days:
             load.download(url, filename=csv_file)
         # Load from a CSV file
         with load.open(csv_file, mode='r') as f:
             data = list(csv.DictReader(f))
         satellites = [EarthSatellite.from_omm(ts, fields) for fields in data]
-    if num_sats > len(satellites) or num_sats <= 0 or num_sats is None:
+    if  num_sats is None or num_sats > len(satellites) or num_sats <= 0:
         print(f"Requested {num_sats} satellites, but only {len(satellites)} available. Using all available satellites.")
         num_sats = len(satellites)
     subset = satellites[:num_sats]
