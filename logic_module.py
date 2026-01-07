@@ -16,7 +16,7 @@ from config import LogicalConfig
 CSV_FILENAME = 'customconstellation.csv'
 MAX_SATS = 100
 TIME_MULTIPLIER = 100.0
-MAX_QUEUE_SIZE = 100
+MAX_QUEUE_SIZE = 1000
 EARTH_RADIUS = 6371.0
 SCALE = 1.0/6371.0
 

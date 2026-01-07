@@ -90,7 +90,7 @@ class SimulationManager:
             flow = self.traffic.flows[list(self.traffic.active_flows)[0]]
             path = self.topology.get_path(g,flow.src, flow.dst)
             self.collect_data(g, flow, path)
-        limit = 1
+        limit = 100
         # 3. FORWARDING LOOP: Process one packet from every node's queue
         for node in self.topology.nodes:
             if not node.queue:
@@ -192,3 +192,12 @@ class SimulationManager:
         trans_delay = packet_size_bits / bandwidth_bps
         
         return prop_delay + trans_delay
+    def calculate_reward(self, packet):
+        if packet.delivered:
+            # High priority packets get more points for finishing
+            base_reward = {1: 20.0, 2: 10.0, 3: 5.0}.get(packet.priority, 5.0)
+            latency_penalty = (packet.delivery_time - packet.creation_time) * 2.0
+            return base_reward - latency_penalty
+        else:
+            # Dropping a Control packet (Priority 1) is a disaster
+            return {1: -100.0, 2: -40.0, 3: -10.0}.get(packet.priority, -10.0)
