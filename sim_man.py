@@ -201,3 +201,43 @@ class SimulationManager:
         else:
             # Dropping a Control packet (Priority 1) is a disaster
             return {1: -100.0, 2: -40.0, 3: -10.0}.get(packet.priority, -10.0)
+
+    def apply_action_to_packet(self, packet, current_node_name, next_hop_name):
+    """
+    Executes the Agent's decision: tries to move packet from current_node -> next_hop
+    Returns: (reward, done, info)
+    """
+    # 1. Get Physical Distance and Link Status
+    # We use the current simulation time
+    sim_time = self.get_sim_time(self.core.current_time)
+    pos, links, _, _ = self.topology.compute(sim_time)
+    
+    # 2. Check if link exists (Is it physically possible?)
+    # We verify if 'next_hop_name' is actually a neighbor of 'current_node_name'
+    # (In RL, the agent might try to teleport the packet, we must punish that)
+    current_node = self.topology.get_node_by_id(current_node_name)
+    next_node = self.topology.get_node_by_id(next_hop_name)
+    
+    # Simple check: calculates delay
+    delay = self.calculate_delays(current_node_name, next_hop_name, packet.size_bits, pos)
+    
+    # 3. Apply Latency to Packet
+    packet.available_at = self.core.current_time + delay
+    self.core.current_time += delay # Advance local time for this packet
+    
+    # 4. Handle "Hop"
+    if next_hop_name == packet.dst:
+        # SUCCESS: Packet reached destination
+        reward = 50.0 - (self.core.current_time - packet.creation_time) # Bonus + Time penalty
+        return reward, True, {"status": "DELIVERED"}
+    
+    elif next_node and len(next_node.queue) < next_node.queue.maxlen:
+        # PROGRESS: Packet moved to next satellite
+        next_node.queue.append(packet)
+        reward = -0.1 # Small penalty for every hop (incentivizes shortest path)
+        return reward, False, {"status": "IN_TRANSIT"}
+    
+    else:
+        # FAILURE: Queue full or Invalid Node
+        reward = -10.0
+        return reward, True, {"status": "DROPPED"}
