@@ -67,6 +67,8 @@ class LinkType(Enum):
 
 class LogicalTopology:
 
+    GROUND_STATIONS = GROUND_STATIONS
+
     def __init__(self, sats):
         self.nodes = self._group_orbits(sats)
         self.cfg = LOGICAL_CONFIG

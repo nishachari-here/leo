@@ -1,11 +1,14 @@
 import math
+import random
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from enum import Enum, auto
 import heapq
 
-# Flow definition
+# Import protocol emulation classes
+from network_moduleTCP import ProtocolPacket, ProtocolType
 
+# Flow definition
 class FlowType(Enum):
     BULK = auto()
     STREAMING = auto()
@@ -21,28 +24,25 @@ class Flow:
     flow_id: int
     src: str
     dst: str
-
     start_time: float
     end_time: float
-
     data_rate_bps: float = 5000000
     packet_size_bytes: int = 1500
-
-    flow_type = FlowType.BULK
-    flow_state = FlowState.WAITING
-
+    flow_type: FlowType = FlowType.BULK
+    flow_state: FlowState = FlowState.WAITING
+    protocol_type: ProtocolType = ProtocolType.TCP  # ADDED: Protocol type
+    
     bytes_generated: int = 0
     bytes_delivered: int = 0
     packets_generated: int = 0
-
+    
     def is_active(self, t: float) -> bool:
         return self.start_time <= t < self.end_time
     
     def is_finished(self, t: float) -> bool:
         return t >= self.end_time
 
-# Packet definition
-
+# Packet definition (kept for compatibility)
 class PacketType(Enum):
     DATA = auto()
     CONTROL = auto()
@@ -67,9 +67,8 @@ class Packet:
     delivery_time: Optional[float] = None
     
     def __post_init__(self):
-        # Automatically calculate bits for transmission delay math
         self.size_bits = self.size_bytes * 8
-
+    
     def decrement_ttl(self) -> bool:
         """Returns False if packet should be dropped (TTL expired)."""
         self.ttl -= 1
@@ -82,88 +81,122 @@ class TrafficModule:
         self.flows: Dict[int, Flow] = {}
         self.active_flows: set[int] = set()
         self._packet_counter: int = 0
-
+        self._seq_counter: int = random.randint(0, 10000)  # Random starting sequence
+    
     def on_packet_generation(self, time: float, interval: float):
+        """Generate packets from active flows using protocol emulation"""
         for flow_id in list(self.active_flows):
             flow = self.flows.get(flow_id)
             if flow is None or flow.is_finished(time):
                 continue
 
-            # Calculate how many packets to burst this interval
+            # Calculate how many packets to send this interval
             bits_to_send = flow.data_rate_bps * interval
             num_packets = max(1, int(bits_to_send // (flow.packet_size_bytes * 8)))
 
             for _ in range(num_packets):
                 # Determine priority based on flow type
                 priority_map = {FlowType.CONTROL: 1, FlowType.STREAMING: 2, FlowType.BULK: 3}
+                priority = priority_map.get(flow.flow_type, 3)
                 
-                packet = Packet(
-                    packet_id=self._packet_counter,
-                    flow_id=flow.flow_id,
+                # Create ProtocolPacket with TCP headers
+                protocol_packet = ProtocolPacket(
                     src=flow.src,
                     dst=flow.dst,
-                    size_bytes=flow.packet_size_bytes,
-                    creation_time=time,
-                    priority=priority_map.get(flow.flow_type, 3),
-                    ttl=64 # Default TTL
+                    src_port=5000 + flow.flow_id,  # Unique source port per flow
+                    dst_port=80,  # HTTP port (example)
+                    seq_num=self._seq_counter,
+                    ack_num=0,
+                    data=bytes(flow.packet_size_bytes),  # Dummy data of correct size
+                    priority=priority,
+                    protocol_type=flow.protocol_type,
+                    creation_time=time
                 )
-
+                
+                # Update sequence counter
+                self._seq_counter += flow.packet_size_bytes
+                
+                # Use the enhanced network module to send packet
+                self.network.send_packet(protocol_packet, time)
+                
+                # Update counters
                 self._packet_counter += 1
                 flow.packets_generated += 1
-                flow.bytes_generated += packet.size_bytes
-
-                # --- THE QUEUE UPDATE ---
-                # Find the source node in the topology
-                src_node = self.network.topology.get_node_by_id(packet.src)
-                
-                if src_node and hasattr(src_node, 'queue'):
-                    # Attempt to add to the node's dequeue
-                    if len(src_node.queue) < src_node.queue.maxlen:
-                        src_node.queue.append(packet)
-                    else:
-                        # Task: Handle Packet Drop (Congestion)
-                        self.on_packet_dropped(packet, "Source Buffer Overflow")
-                else:
-                    # If it's a Ground Station without a queue, inject directly
-                    gs_queue = self.network.topology.gs_queues.get(packet.src)
-                    if gs_queue is not None:
-                        if len(gs_queue) < gs_queue.maxlen:
-                            gs_queue.append(packet)
-                        else:
-                            self.on_packet_dropped(packet, "GS Source Buffer Overflow")
-
-    def on_packet_delivered(self, packet: Packet, time: float):
+                flow.bytes_generated += flow.packet_size_bytes
+    
+    def on_packet_delivered(self, packet, time: float):
         """
-        Success Signal: The packet reached its destination GS.
+        Handle packet delivery for both Packet and ProtocolPacket types
+        Called by network module when packet reaches destination
         """
         packet.delivered = True
         packet.delivery_time = time
         
-        # Calculate Latency: How long did the trip take?
+        # Calculate latency
         latency = packet.delivery_time - packet.creation_time
-
-        flow = self.flows.get(packet.flow_id)
-        if flow:
-            flow.bytes_delivered += packet.size_bytes
-            # Optional: You could track average latency per flow here
-            
-        # Log to the SimulationManager's dataset for RL 'Positive Reward'
-        self.network.delivery_logs.append({
-    "type": "DELIVERY",
-    "packet_id": packet.packet_id,
-    "latency": latency,
-    "hops": packet.hops,
-    "status": "SUCCESS"
-})
-
-    def on_packet_dropped(self, packet: Packet, reason: str):
-        """
-        Failure Signal: Packet was lost due to TTL or Overflow.
-        """
-        # Log to dataset for RL 'Negative Reward'
-        self.network.delivery_logs.append({
-        "type": "DROP",
-        "packet_id": packet.packet_id,
-        "reason": reason,
-        "status": "FAILURE"
-    })
+        
+        # Find the flow
+        flow_id = self._get_flow_id_from_packet(packet)
+        if flow_id is not None:
+            flow = self.flows.get(flow_id)
+            if flow:
+                # Get packet size
+                packet_size = self._get_packet_size(packet)
+                flow.bytes_delivered += packet_size
+        
+        # Log for RL
+        if hasattr(self.network, 'delivery_logs'):
+            self.network.delivery_logs.append({
+                "type": "DELIVERY",
+                "packet_id": self._get_packet_id(packet),
+                "latency": latency,
+                "hops": getattr(packet, 'hops', 0),
+                "status": "SUCCESS"
+            })
+    
+    def on_packet_dropped(self, packet, reason: str):
+        """Handle packet drop for both packet types"""
+        if hasattr(self.network, 'delivery_logs'):
+            self.network.delivery_logs.append({
+                "type": "DROP",
+                "packet_id": self._get_packet_id(packet),
+                "reason": reason,
+                "status": "FAILURE"
+            })
+    
+    def on_ack_received(self, packet, time: float):
+        """Handle ACK packets (for TCP congestion control)"""
+        # This would be called by the network module when ACKs are received
+        if hasattr(self.network, 'delivery_logs'):
+            self.network.delivery_logs.append({
+                "type": "ACK",
+                "packet_id": getattr(packet, 'seq_num', 0),
+                "time": time,
+                "status": "ACK_RECEIVED"
+            })
+    
+    # Helper methods for packet type compatibility
+    def _get_flow_id_from_packet(self, packet):
+        """Extract flow ID from different packet types"""
+        if hasattr(packet, 'flow_id'):
+            return packet.flow_id
+        elif hasattr(packet, 'src_port'):
+            # ProtocolPacket: derive flow_id from src_port
+            return (packet.src_port - 5000) if packet.src_port >= 5000 else 0
+        return None
+    
+    def _get_packet_size(self, packet):
+        """Get packet size from different packet types"""
+        if hasattr(packet, 'data'):
+            return len(packet.data)
+        elif hasattr(packet, 'size_bytes'):
+            return packet.size_bytes
+        return 1500  # Default
+    
+    def _get_packet_id(self, packet):
+        """Get packet ID from different packet types"""
+        if hasattr(packet, 'packet_id'):
+            return packet.packet_id
+        elif hasattr(packet, 'seq_num'):
+            return packet.seq_num
+        return 0
