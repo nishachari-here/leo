@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satellite Network Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background: rgba(25, 35, 45, 0.9);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(100, 150, 200, 0.2);
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #4fc3f7;
+            text-shadow: 0 2px 10px rgba(79, 195, 247, 0.3);
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #90a4ae;
+            margin-bottom: 40px;
+            font-size: 1.1em;
+        }
+
+        .mode-selection {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 25px;
+            margin-bottom: 40px;
+        }
+
+        .mode-card {
+            background: rgba(40, 50, 60, 0.8);
+            border-radius: 15px;
+            padding: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+            text-align: center;
+        }
+
+        .mode-card:hover {
+            transform: translateY(-5px);
+            border-color: #4fc3f7;
+            box-shadow: 0 5px 20px rgba(79, 195, 247, 0.2);
+        }
+
+        .mode-card.selected {
+            border-color: #00e676;
+            background: rgba(40, 60, 50, 0.8);
+        }
+
+        .mode-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+            color: #4fc3f7;
+        }
+
+        .mode-title {
+            font-size: 1.4em;
+            margin-bottom: 10px;
+            color: #ffffff;
+        }
+
+        .mode-desc {
+            color: #b0bec5;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+
+        .protocol-selection {
+            margin-bottom: 40px;
+            padding: 25px;
+            background: rgba(30, 40, 50, 0.6);
+            border-radius: 15px;
+        }
+
+        .protocol-title {
+            font-size: 1.3em;
+            margin-bottom: 20px;
+            color: #4fc3f7;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .protocol-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .protocol-option {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .protocol-option label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px;
+            background: rgba(50, 60, 70, 0.8);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .protocol-option label:hover {
+            background: rgba(60, 70, 80, 0.8);
+        }
+
+        .protocol-option input:checked + span::before {
+            content: "✓ ";
+            color: #00e676;
+            font-weight: bold;
+        }
+
+        .simulation-parameters {
+            margin-bottom: 40px;
+            padding: 25px;
+            background: rgba(30, 40, 50, 0.6);
+            border-radius: 15px;
+        }
+
+        .parameter-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .parameter {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .parameter label {
+            color: #90a4ae;
+            font-size: 0.95em;
+        }
+
+        .parameter input {
+            padding: 12px 15px;
+            background: rgba(50, 60, 70, 0.8);
+            border: 1px solid rgba(100, 150, 200, 0.3);
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 1em;
+        }
+
+        .parameter input:focus {
+            outline: none;
+            border-color: #4fc3f7;
+        }
+
+        .control-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+
+        button {
+            padding: 15px 40px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        #startBtn {
+            background: linear-gradient(135deg, #00e676, #00c853);
+            color: #002200;
+            flex: 1;
+        }
+
+        #startBtn:hover {
+            background: linear-gradient(135deg, #00c853, #00e676);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 230, 118, 0.3);
+        }
+
+        #startBtn:disabled {
+            background: #666;
+            color: #999;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        #resetBtn {
+            background: rgba(255, 82, 82, 0.1);
+            color: #ff5252;
+            border: 2px solid #ff5252;
+        }
+
+        #resetBtn:hover {
+            background: rgba(255, 82, 82, 0.2);
+        }
+
+        .output-panel {
+            margin-top: 40px;
+            padding: 25px;
+            background: rgba(20, 30, 40, 0.9);
+            border-radius: 15px;
+            border: 1px solid rgba(100, 150, 200, 0.2);
+        }
+
+        .output-title {
+            font-size: 1.3em;
+            margin-bottom: 20px;
+            color: #4fc3f7;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #output {
+            background: rgba(10, 20, 30, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            line-height: 1.4;
+            color: #a5d6a7;
+            white-space: pre-wrap;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(100, 150, 200, 0.2);
+            font-size: 0.9em;
+            color: #90a4ae;
+        }
+
+        .loading {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            color: #ffca28;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 202, 40, 0.3);
+            border-top: 3px solid #ffca28;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ff5252;
+        }
+
+        .status-dot.connected {
+            background: #00e676;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .mode-selection {
+                grid-template-columns: 1fr;
+            }
+            
+            .control-buttons {
+                flex-direction: column;
+            }
+            
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛰️ Satellite Network Simulator</h1>
+        <p class="subtitle">Simulate LEO satellite networks with different protocols and configurations</p>
+        
+        <div class="mode-selection">
+            <div class="mode-card" data-mode="full" onclick="selectMode('full')">
+                <div class="mode-icon">🚀</div>
+                <div class="mode-title">Full Simulation</div>
+                <div class="mode-desc">
+                    Complete simulation with TCP protocol, congestion control, QoS, and routing.
+                    Best for detailed network analysis.
+                </div>
+            </div>
+            
+            <div class="mode-card" data-mode="quick" onclick="selectMode('quick')">
+                <div class="mode-icon">⚡</div>
+                <div class="mode-title">Quick Simulation</div>
+                <div class="mode-desc">
+                    Fast simulation with UDP protocol, no congestion control.
+                    Good for rapid testing and validation.
+                </div>
+            </div>
+            
+            <div class="mode-card" data-mode="no-tcp" onclick="selectMode('no-tcp')">
+                <div class="mode-icon">🔌</div>
+                <div class="mode-title">Without TCP</div>
+                <div class="mode-desc">
+                    Simulation using custom protocols without TCP overhead.
+                    Useful for protocol research and development.
+                </div>
+            </div>
+        </div>
+
+        <div class="protocol-selection">
+            <div class="protocol-title">📡 Network Protocol Selection</div>
+            <div class="protocol-options">
+                <div class="protocol-option">
+                    <label>
+                        <input type="radio" name="protocol" value="tcp" checked>
+                        <span>TCP (Reliable)</span>
+                    </label>
+                </div>
+                <div class="protocol-option">
+                    <label>
+                        <input type="radio" name="protocol" value="udp">
+                        <span>UDP (Fast)</span>
+                    </label>
+                </div>
+                <div class="protocol-option">
+                    <label>
+                        <input type="radio" name="protocol" value="quic">
+                        <span>QUIC (Modern)</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="simulation-parameters">
+            <div class="protocol-title">⚙️ Simulation Parameters</div>
+            <div class="parameter-group">
+                <div class="parameter">
+                    <label for="duration">Duration (seconds):</label>
+                    <input type="number" id="duration" value="30" min="5" max="300">
+                </div>
+                <div class="parameter">
+                    <label for="interval">Interval (seconds):</label>
+                    <input type="number" id="interval" value="0.5" min="0.1" max="5" step="0.1">
+                </div>
+                <div class="parameter">
+                    <label for="satellites">Number of Satellites:</label>
+                    <input type="number" id="satellites" value="8" min="1" max="100">
+                </div>
+            </div>
+            <div class="parameter-group">
+                <div class="parameter">
+                    <label for="flows">Number of Flows:</label>
+                    <input type="number" id="flows" value="3" min="1" max="20">
+                </div>
+                <div class="parameter">
+                    <label for="datasize">Data Size (KB):</label>
+                    <input type="number" id="datasize" value="10" min="1" max="1000">
+                </div>
+                <div class="parameter">
+                    <label for="datatype">Data Type:</label>
+                    <select id="datatype">
+                        <option value="bulk">Bulk Data</option>
+                        <option value="streaming">Streaming</option>
+                        <option value="control">Control Messages</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="control-buttons">
+            <button id="startBtn" onclick="startSimulation()">
+                <span>▶️ Start Simulation</span>
+            </button>
+            <button id="resetBtn" onclick="resetSimulation()">
+                <span>🔄 Reset</span>
+            </button>
+        </div>
+
+        <div class="output-panel">
+            <div class="output-title">📊 Simulation Output</div>
+            <div id="output">Ready to simulate... Select a mode and click Start Simulation</div>
+            <div class="status-bar">
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <span>Simulation in progress...</span>
+                </div>
+                <div class="connection-status">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Disconnected</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedMode = 'full';
+        let isSimulating = false;
+        let simulationOutput = [];
+
+        function selectMode(mode) {
+            selectedMode = mode;
+            
+            // Update UI
+            document.querySelectorAll('.mode-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            document.querySelector(`[data-mode="${mode}"]`).classList.add('selected');
+            
+            // Update protocol selection based on mode
+            updateProtocolForMode(mode);
+            
+            logOutput(`Mode selected: ${getModeName(mode)}`);
+        }
+
+        function getModeName(mode) {
+            const names = {
+                'full': 'Full Simulation',
+                'quick': 'Quick Simulation',
+                'no-tcp': 'Without TCP'
+            };
+            return names[mode] || mode;
+        }
+
+        function updateProtocolForMode(mode) {
+            const protocolRadios = document.getElementsByName('protocol');
+            
+            switch(mode) {
+                case 'full':
+                    protocolRadios[0].checked = true; // TCP
+                    break;
+                case 'quick':
+                    protocolRadios[1].checked = true; // UDP
+                    break;
+                case 'no-tcp':
+                    protocolRadios[2].checked = true; // QUIC
+                    break;
+            }
+            
+            logOutput(`Protocol set to: ${document.querySelector('input[name="protocol"]:checked').value.toUpperCase()}`);
+        }
+
+        function logOutput(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            let prefix = '';
+            let color = '#a5d6a7'; // Default green
+            
+            switch(type) {
+                case 'error':
+                    prefix = '❌ ';
+                    color = '#ff5252';
+                    break;
+                case 'warning':
+                    prefix = '⚠️ ';
+                    color = '#ffca28';
+                    break;
+                case 'success':
+                    prefix = '✅ ';
+                    color = '#00e676';
+                    break;
+                case 'info':
+                    prefix = 'ℹ️ ';
+                    color = '#4fc3f7';
+                    break;
+            }
+            
+            const formattedMessage = `[${timestamp}] ${prefix}${message}`;
+            simulationOutput.push(formattedMessage);
+            
+            // Keep only last 50 lines
+            if (simulationOutput.length > 50) {
+                simulationOutput = simulationOutput.slice(-50);
+            }
+            
+            const outputDiv = document.getElementById('output');
+            outputDiv.innerHTML = simulationOutput.join('\n');
+            outputDiv.style.color = color;
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
+
+        function updateStatus(connected) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            
+            if (connected) {
+                dot.classList.add('connected');
+                text.textContent = 'Connected';
+                text.style.color = '#00e676';
+            } else {
+                dot.classList.remove('connected');
+                text.textContent = 'Disconnected';
+                text.style.color = '#ff5252';
+            }
+        }
+
+        async function startSimulation() {
+            if (isSimulating) {
+                logOutput('Simulation already in progress', 'warning');
+                return;
+            }
+            
+            // Get parameters
+            const duration = document.getElementById('duration').value;
+            const interval = document.getElementById('interval').value;
+            const satellites = document.getElementById('satellites').value;
+            const flows = document.getElementById('flows').value;
+            const datasize = document.getElementById('datasize').value;
+            const datatype = document.getElementById('datatype').value;
+            const protocol = document.querySelector('input[name="protocol"]:checked').value;
+            
+            // Validate
+            if (!selectedMode) {
+                logOutput('Please select a simulation mode first', 'error');
+                return;
+            }
+            
+            // Update UI
+            isSimulating = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('startBtn').innerHTML = '<span>🔄 Running...</span>';
+            document.getElementById('loading').style.display = 'flex';
+            
+            // Clear previous output
+            simulationOutput = [];
+            
+            logOutput('='.repeat(60), 'info');
+            logOutput(`Starting ${getModeName(selectedMode)}`, 'success');
+            logOutput('='.repeat(60), 'info');
+            logOutput(`Parameters: ${duration}s duration, ${interval}s interval`, 'info');
+            logOutput(`Configuration: ${satellites} satellites, ${flows} flows`, 'info');
+            logOutput(`Protocol: ${protocol.toUpperCase()}, Data: ${datasize}KB ${datatype}`, 'info');
+            logOutput('', 'info');
+            
+            updateStatus(true);
+            
+            try {
+                // Prepare simulation configuration
+                const config = {
+                    mode: selectedMode,
+                    protocol: protocol,
+                    duration: parseFloat(duration),
+                    interval: parseFloat(interval),
+                    satellites: parseInt(satellites),
+                    flows: parseInt(flows),
+                    datasize: parseInt(datasize),
+                    datatype: datatype,
+                    timestamp: new Date().toISOString()
+                };
+                
+                logOutput('Initializing simulation backend...', 'info');
+                
+                // Here you would typically send this to your backend
+                // For this example, we'll simulate with a timeout
+                await simulateBackend(config);
+                
+            } catch (error) {
+                logOutput(`Simulation error: ${error.message}`, 'error');
+            } finally {
+                // Reset UI
+                isSimulating = false;
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('startBtn').innerHTML = '<span>▶️ Start Simulation</span>';
+                document.getElementById('loading').style.display = 'none';
+                
+                logOutput('Simulation completed', 'success');
+                updateStatus(false);
+            }
+        }
+
+        async function simulateBackend(config) {
+            // This is where you would call your actual Python simulation
+            // For now, we'll simulate with timeouts
+            
+            return new Promise((resolve, reject) => {
+                const steps = Math.ceil(config.duration / config.interval);
+                let currentStep = 0;
+                
+                const simulateStep = () => {
+                    if (currentStep >= steps) {
+                        resolve();
+                        return;
+                    }
+                    
+                    const currentTime = currentStep * config.interval;
+                    
+                    // Simulate some output
+                    if (currentStep % 2 === 0) {
+                        const packetsSent = Math.floor(Math.random() * 100) + 50;
+                        const packetsReceived = Math.floor(packetsSent * (0.7 + Math.random() * 0.3));
+                        const latency = (50 + Math.random() * 100).toFixed(1);
+                        
+                        logOutput(`Time: ${currentTime.toFixed(1)}s - Sent: ${packetsSent}, Received: ${packetsReceived}, Latency: ${latency}ms`, 'info');
+                    }
+                    
+                    if (currentStep % 5 === 0) {
+                        const events = ['Link established', 'Packet routed', 'Congestion detected', 'ACK received', 'Retransmission'];
+                        const randomEvent = events[Math.floor(Math.random() * events.length)];
+                        logOutput(`Event: ${randomEvent}`, 'warning');
+                    }
+                    
+                    currentStep++;
+                    setTimeout(simulateStep, 500); // Simulate processing time
+                };
+                
+                setTimeout(simulateStep, 1000);
+            });
+        }
+
+        function resetSimulation() {
+            if (isSimulating) {
+                if (!confirm('Simulation is running. Stop and reset?')) {
+                    return;
+                }
+                isSimulating = false;
+            }
+            
+            // Reset UI
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('startBtn').innerHTML = '<span>▶️ Start Simulation</span>';
+            document.getElementById('loading').style.display = 'none';
+            
+            // Clear output
+            simulationOutput = [];
+            document.getElementById('output').innerHTML = 'Ready to simulate... Select a mode and click Start Simulation';
+            document.getElementById('output').style.color = '#a5d6a7';
+            
+            // Reset parameters to defaults
+            document.getElementById('duration').value = 30;
+            document.getElementById('interval').value = 0.5;
+            document.getElementById('satellites').value = 8;
+            document.getElementById('flows').value = 3;
+            document.getElementById('datasize').value = 10;
+            
+            updateStatus(false);
+            logOutput('Simulation reset', 'info');
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            // Select default mode
+            selectMode('full');
+            
+            // Add protocol change listeners
+            document.querySelectorAll('input[name="protocol"]').forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    logOutput(`Protocol changed to: ${e.target.value.toUpperCase()}`, 'info');
+                });
+            });
+            
+            logOutput('Satellite Network Simulator initialized', 'success');
+            logOutput('Select a simulation mode and configure parameters', 'info');
+        });
+    </script>
+</body>
+</html>
