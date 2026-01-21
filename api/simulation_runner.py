@@ -16,7 +16,7 @@ class SimulationRunner:
         """Run full simulation with TCP"""
         print(f"Starting FULL simulation with config: {config}")
         # Import your simulation modules
-        from sim_man import run_quick_test
+        from core.sim_man import run_quick_test
         
         # Override parameters based on config
         result = run_quick_test()
@@ -39,10 +39,11 @@ class SimulationRunner:
         print(f"Starting QUICK simulation with config: {config}")
         
         # Modify sim_man to use UDP
-        from sim_man import run_quick_test, SimulationManager
-        from network_moduleTCP import ProtocolType
+        from core.sim_man import run_quick_test, SimulationManager
+        from network.network_moduleTCP import ProtocolType
         
         # Create custom simulation with UDP
+        from data.setup import get_satellite_data
         satellites = get_satellite_data(num_sats=config['satellites'])
         sim = SimulationManager(satellites)
         
@@ -69,8 +70,8 @@ class SimulationRunner:
         print(f"Starting NO-TCP simulation with config: {config}")
         
         # This would use your custom protocol stack
-        from sim_man import run_quick_test
-        from network_moduleTCP import EnhancedNetworkModule
+        from core.sim_man import run_quick_test
+        from network.network_moduleTCP import EnhancedNetworkModule
         
         result = run_quick_test()
         

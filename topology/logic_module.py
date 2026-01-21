@@ -11,7 +11,7 @@ from enum import Enum, auto
 from typing import Dict, List, Tuple, Set
 import igraph as ig
 from collections import deque
-from config import LogicalConfig
+from config.config import LogicalConfig
 
 # Configuration Section
 CSV_FILENAME = 'customconstellation.csv'
@@ -41,7 +41,6 @@ class SatelliteNode:
     sat: EarthSatellite
     orbit_id: int
     index: int
-    queue: deque = None
     
     def __post_init__(self):
         if self.queue is None:
@@ -72,9 +71,6 @@ class LogicalTopology:
         # Group satellites by orbit
         self.nodes = self._group_orbits(sats)
         
-        self.links = set()
-        self.prev_links = set()
-        self.last_update_time = None
         self.node_map = {node.sat.name: node for node in self.nodes}
         
         # Initialize queues
@@ -381,6 +377,3 @@ class LogicalTopology:
     
     def get_node_by_id(self, node_id: str):
         return self.node_map.get(node_id)
-    
-    def get_queue_status(self):
-        return {node.sat.name: len(node.queue) for node in self.nodes}

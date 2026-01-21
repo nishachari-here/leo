@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Set
 import heapq
 import numpy as np
-from logic_module import GROUND_STATIONS, LinkType
+from topology.logic_module import GROUND_STATIONS, LinkType
 import warnings
 warnings.filterwarnings('ignore', message='Couldn\'t reach some vertices')
 
@@ -197,334 +197,162 @@ class ProtocolPacket:
 class TopologyRouter:
     """Router that uses the logic module's topology for routing"""
     
-    def __init__(self, network_module):
-        self.network = network_module
-        self.route_cache: Dict[Tuple[str, str], List[str]] = {}
-        self.cache_ttl = 5.0
-        self.last_cache_clean = 0.0
-        
-        # Current topology state
-        self.current_graph = None
-        self.current_positions = None
-        self.current_gs_positions = None
-        self.last_topology_update = 0.0
-    
-    def update_topology(self, current_time: float) -> bool:
-        """Update topology information"""
-        if not hasattr(self.network, 'topology') or not self.network.topology:
-            return False
-        
-        try:
-            # Update every 0.1 seconds or when needed
-            if current_time - self.last_topology_update < 0.1 and self.current_graph is not None:
-                return True
-            
-            sim_time = self.network.sim.get_sim_time(current_time)
-            
-            # Get positions and links
-            pos, links, new_links, removed_links = self.network.topology.compute(sim_time)
-            
-            # Get ground station positions
-            gs_positions = {}
-            for name, lat, lon, alt in GROUND_STATIONS:
-                try:
-                    gs_positions[name] = self.network.topology.get_gs_position(name, sim_time)
-                except:
-                    # Fallback to approximate position
-                    gs_positions[name] = np.array([0, 0, 0])
-            
-            # Build unified graph
-            self.current_graph = self.network.topology.construct_unified_graph(pos, gs_positions)
-            self.current_positions = pos
-            self.current_gs_positions = gs_positions
-            self.last_topology_update = current_time
-            
-            return True
-            
-        except Exception as e:
-            if self.network.debug:
-                print(f"[ROUTER] Update error: {e}")
-            return False
-    
-    def find_path_with_fallback(self, src: str, dst: str, current_time: float) -> List[str]:
-        """Find path with aggressive fallback strategies"""
-        # Check cache first
-        cache_key = (src, dst)
-        if cache_key in self.route_cache:
-            cached_time, path = self.route_cache[cache_key]
-            if current_time - cached_time < self.cache_ttl and len(path) <= 10:
-                return path.copy()
-        
-        # Update topology if needed
-        self.update_topology(current_time)
-        
-        if self.current_graph is None:
-            return self._simple_fallback_path(src, dst)
-        
-        try:
-            # Try normal path first
-            path = self.find_path(src, dst, current_time)
-            
-            if path:
-                return path
-            
-            # If no path found, try alternative strategies
-            print(f"[ROUTER] No direct path from {src} to {dst}, trying fallback...")
-            
-            # Strategy 1: Try via a common intermediate ground station
-            intermediate_stations = ["GS_USA", "GS_AUSTRALIA", "GS_BRAZIL", "GS_INDIA"]
-            
-            for intermediate in intermediate_stations:
-                if intermediate != src and intermediate != dst:
-                    path1 = self.find_path(src, intermediate, current_time)
-                    path2 = self.find_path(intermediate, dst, current_time)
-                    
-                    if path1 and path2:
-                        # Combine paths (remove duplicate intermediate)
-                        combined_path = path1[:-1] + path2
-                        print(f"[ROUTER] Found 2-hop path via {intermediate}")
-                        cache_key = (src, dst)
-                        self.route_cache[cache_key] = (current_time, combined_path.copy())
-                        return combined_path
-            
-            # Strategy 2: Find ANY satellite path
-            try:
-                src_idx = self.current_graph.vs.find(name=src).index
-                dst_idx = self.current_graph.vs.find(name=dst).index
-                
-                # Get ALL simple paths (not just shortest) with cutoff
-                try:
-                    paths = self.current_graph.get_all_simple_paths(src_idx, to=dst_idx, cutoff=8)
-                    if paths:
-                        # Pick the shortest path
-                        shortest = min(paths, key=len)
-                        path_names = [self.current_graph.vs[i]["name"] for i in shortest]
-                        print(f"[ROUTER] Found alternative path ({len(path_names)-1} hops)")
-                        cache_key = (src, dst)
-                        self.route_cache[cache_key] = (current_time, path_names.copy())
-                        return path_names
-                except:
-                    pass
-            except:
-                pass
-            
-            # Strategy 3: Emergency 3-hop path
-            emergency_path = self._emergency_three_hop_path(src, dst, current_time)
-            if emergency_path:
-                cache_key = (src, dst)
-                self.route_cache[cache_key] = (current_time, emergency_path.copy())
-                return emergency_path
-            
-            return []
-                
-        except Exception as e:
-            return self._simple_fallback_path(src, dst)
-    
-    def find_path(self, src: str, dst: str, current_time: float) -> List[str]:
-        """Find path from src to dst - FIXED TO FIND SHORTER PATHS"""
-        # Check cache first
-        cache_key = (src, dst)
-        if cache_key in self.route_cache:
-            cached_time, path = self.route_cache[cache_key]
-            if current_time - cached_time < self.cache_ttl and len(path) <= 10:
-                return path.copy()
-        
-        # Update topology if needed
-        self.update_topology(current_time)
-        
-        if self.current_graph is None:
-            return self._simple_fallback_path(src, dst)
-        
-        try:
-            # IMPORTANT: Get SHORTEST path with hop limit
-            start_idx = self.current_graph.vs.find(name=src).index
-            end_idx = self.current_graph.vs.find(name=dst).index
-            
-            # Get shortest path with max 10 hops
-            try:
-                # First try to find a direct path through at most 2 satellites
-                path_indices = None
-                
-                # Try BFS with depth limit
-                paths = self.current_graph.get_all_shortest_paths(start_idx, to=end_idx)
-                if paths:
-                    # Find shortest path
-                    shortest_path = min(paths, key=len)
-                    if len(shortest_path) <= 7:  # Accept up to 7 hops total
-                        path_indices = shortest_path
-                
-                if path_indices:
-                    path_names = [self.current_graph.vs[i]["name"] for i in path_indices]
-                    if len(path_names) > 10:  # Path too long
-                        # Try to find a better path via a single satellite
-                        return self._find_path_via_single_satellite(src, dst, current_time)
-                    
-                    self.route_cache[cache_key] = (current_time, path_names.copy())
-                    return path_names
-                else:
-                    # Fallback to single satellite path
-                    return self._find_path_via_single_satellite(src, dst, current_time)
-                    
-            except Exception as e:
-                return self._find_path_via_single_satellite(src, dst, current_time)
-                
-        except Exception as e:
-            return self._simple_fallback_path(src, dst)
+    def __init__(self, topology):
+        self.topology = topology
 
-    def _find_path_via_single_satellite(self, src: str, dst: str, current_time: float) -> List[str]:
-        """Find path via a single satellite (shortest possible)"""
-        if not self.current_graph:
-            return []
-        
-        try:
-            # Get all satellites
-            sat_vertices = [v for v in self.current_graph.vs if v["type"] == "satellite"]
-            
-            # Try each satellite as intermediate
-            for sat_v in sat_vertices:
-                sat_name = sat_v["name"]
-                
-                # Check if src can connect to satellite AND satellite to dst
-                if self._check_direct_connection(src, sat_name) and self._check_direct_connection(sat_name, dst):
-                    path = [src, sat_name, dst]
-                    cache_key = (src, dst)
-                    self.route_cache[cache_key] = (current_time, path.copy())
-                    return path
-            
-            # Try 2 satellites if needed
-            for sat1 in sat_vertices:
-                for sat2 in sat_vertices:
-                    if sat1 == sat2:
-                        continue
-                        
-                    sat1_name = sat1["name"]
-                    sat2_name = sat2["name"]
-                    
-                    if (self._check_direct_connection(src, sat1_name) and 
-                        self._check_direct_connection(sat1_name, sat2_name) and 
-                        self._check_direct_connection(sat2_name, dst)):
-                        path = [src, sat1_name, sat2_name, dst]
-                        if len(path) <= 6:  # Accept up to 6 hops
-                            cache_key = (src, dst)
-                            self.route_cache[cache_key] = (current_time, path.copy())
-                            return path
-            
-            return []
-            
-        except:
-            return []
-    
-    def _emergency_three_hop_path(self, src: str, dst: str, current_time: float) -> List[str]:
-        """Emergency 3-hop path: GS → SAT1 → SAT2 → GS"""
-        if not self.current_graph:
-            return []
-        
-        try:
-            # Get all satellites
-            sat_vertices = [v for v in self.current_graph.vs if v["type"] == "satellite"]
-            
-            # Try every combination of 2 satellites
-            for sat1 in sat_vertices:
-                for sat2 in sat_vertices:
-                    if sat1 == sat2:
-                        continue
-                        
-                    sat1_name = sat1["name"]
-                    sat2_name = sat2["name"]
-                    
-                    # Check: src → sat1, sat1 → sat2, sat2 → dst
-                    if (self._check_direct_connection(src, sat1_name) and 
-                        self._check_direct_connection(sat1_name, sat2_name) and 
-                        self._check_direct_connection(sat2_name, dst)):
-                        
-                        path = [src, sat1_name, sat2_name, dst]
-                        print(f"[ROUTER] Emergency 3-hop path: {src} → {sat1_name} → {sat2_name} → {dst}")
-                        return path
-            
-            return []
-        except:
-            return []
-    
-    def _check_direct_connection(self, node1: str, node2: str) -> bool:
-        """Check if two nodes are directly connected in current graph"""
-        if not self.current_graph:
-            return False
-        
-        try:
-            v1 = self.current_graph.vs.find(name=node1)
-            v2 = self.current_graph.vs.find(name=node2)
-            
-            # Check if edge exists
-            return self.current_graph.are_connected(v1, v2)
-        except:
-            return False
-    
-    def _simple_fallback_path(self, src: str, dst: str) -> List[str]:
-        """Simple fallback path - improved with better searching"""
-        if not self.current_graph:
-            return []
-        
-        try:
-            # Try direct connection
-            if self._check_direct_connection(src, dst):
-                return [src, dst]
-            
-            # For ground stations, try to find ANY path through satellites
-            if src.startswith("GS_") and dst.startswith("GS_"):
-                # Get all satellites
-                sat_vertices = [v for v in self.current_graph.vs if v["type"] == "satellite"]
-                
-                # Try each satellite
-                for sat_v in sat_vertices:
-                    sat_name = sat_v["name"]
-                    if self._check_direct_connection(src, sat_name):
-                        # This satellite connects to source, try to find path to destination
-                        try:
-                            sat_idx = self.current_graph.vs.find(name=sat_name).index
-                            dst_idx = self.current_graph.vs.find(name=dst).index
-                            
-                            # Try to find path from satellite to destination
-                            path = self.current_graph.get_shortest_paths(
-                                sat_idx, to=dst_idx, output="vpath"
-                            )[0]
-                            if path:
-                                full_path = [src] + [self.current_graph.vs[i]["name"] for i in path]
-                                return full_path
-                        except:
-                            continue
-            
-            return []
-        except:
-            return []
-    
-    def get_next_hop(self, src: str, dst: str, current_time: float) -> Optional[str]:
-        """Get next hop from src to dst - WITH SELF-TO-SELF BLOCK"""
-        
-        # BLOCK self-to-self routing requests
+    def get_path(self, src: str, dst: str, sim_time) -> List[str]:
+        """
+        Stateless path query for a single topology snapshot.
+        """
         if src == dst:
-            if self.network.debug:
-                print(f"[ROUTER BLOCKED] Self-to-self routing request: {src} → {dst}")
-            return None
+            return []
+
+        # Compute topology snapshot
+        pos, _, _, _ = self.topology.compute(sim_time)
+
+        gs_positions = {
+            name: self.topology.get_gs_position(name, sim_time)
+            for name, *_ in GROUND_STATIONS
+        }
+
+        graph = self.topology.construct_unified_graph(pos, gs_positions)
+
+        # Try primary routing
+        path = self._find_shortest_path(graph, src, dst)
+        if path:
+            return path
+
+        # Fallbacks (pure)
+        return self._fallback_path(graph, src, dst)
+    
+    def _find_shortest_path(self, graph, src, dst) -> List[str]:
+        try:
+            s = graph.vs.find(name=src).index
+            d = graph.vs.find(name=dst).index
+            paths = graph.get_all_shortest_paths(s, to=d)
+            if not paths:
+                return []
+            return [graph.vs[i]["name"] for i in min(paths, key=len)]
+        except:
+            return []
+
+    def _fallback_path(self, graph, src, dst) -> List[str]:
+        # single satellite
+        for sat in graph.vs.select(type="satellite"):
+            name = sat["name"]
+            if graph.are_connected(src, name) and graph.are_connected(name, dst):
+                return [src, name, dst]
+        return []
+
+    def _find_path_via_single_satellite(self, graph, src: str, dst: str) -> List[str]:
+        """Find path via one or two satellites (pure logic)"""
+
+        try:
+            sat_vertices = [v for v in graph.vs if v["type"] == "satellite"]
+
+            # One satellite
+            for sat in sat_vertices:
+                name = sat["name"]
+                if graph.are_connected(src, name) and graph.are_connected(name, dst):
+                    return [src, name, dst]
+
+            # Two satellites
+            for sat1 in sat_vertices:
+                for sat2 in sat_vertices:
+                 if sat1 == sat2:
+                        continue
+                n1, n2 = sat1["name"], sat2["name"]
+                if (
+                    graph.are_connected(src, n1)
+                    and graph.are_connected(n1, n2)
+                    and graph.are_connected(n2, dst)
+                ):
+                    return [src, n1, n2, dst]
+
+            return []
+
+        except Exception:
+            return []
+
+    
+    def _emergency_three_hop_path(self, graph, src: str, dst: str) -> List[str]:
+        """Emergency GS → SAT1 → SAT2 → GS path"""
+
+        try:
+            sat_vertices = [v for v in graph.vs if v["type"] == "satellite"]
+
+            for sat1 in sat_vertices:
+                for sat2 in sat_vertices:
+                    if sat1 == sat2:
+                        continue
+                    n1, n2 = sat1["name"], sat2["name"]
+
+                    if (
+                        graph.are_connected(src, n1)
+                        and graph.are_connected(n1, n2)
+                        and graph.are_connected(n2, dst)
+                    ):
+                        return [src, n1, n2, dst]
+
+            return []
+
+        except Exception:
+            return []
+
+    
+    def _check_direct_connection(self, graph, node1: str, node2: str) -> bool:
+        try:
+            return graph.are_connected(node1, node2)
+        except Exception:
+            return False
+
+    def _simple_fallback_path(self, graph, src: str, dst: str) -> List[str]:
+        """Simple fallback routing without state"""
+
+        try:
+            # Direct connection
+            if graph.are_connected(src, dst):
+                return [src, dst]
+
+            # Ground-station fallback via satellites
+            if src.startswith("GS_") and dst.startswith("GS_"):
+                sat_vertices = [v for v in graph.vs if v["type"] == "satellite"]
+
+                for sat in sat_vertices:
+                    name = sat["name"]
+                    if graph.are_connected(src, name):
+                        try:
+                            s = graph.vs.find(name=name).index
+                            d = graph.vs.find(name=dst).index
+                            path = graph.get_shortest_paths(s, to=d, output="vpath")[0]
+                            if path:
+                                return [src] + [graph.vs[i]["name"] for i in path]
+                        except Exception:
+                            continue
+
+            return []
+
+        except Exception:
+            return []
         
-        path = self.find_path_with_fallback(src, dst, current_time)
-        if len(path) > 1:
-            return path[1]
-        
-        # If still no path, check if this is a critical flow
-        if src.startswith("GS_") and dst.startswith("GS_"):
-            print(f"[ROUTER CRITICAL] No route found from {src} to {dst}")
-            
-            # Try one more emergency attempt
-            if not self._check_direct_connection(src, dst):
-                # Look for ANY satellite that can reach both
-                if self.current_graph:
-                    sat_vertices = [v for v in self.current_graph.vs if v["type"] == "satellite"]
-                    for sat in sat_vertices:
-                        sat_name = sat["name"]
-                        if self._check_direct_connection(src, sat_name):
-                            print(f"[ROUTER] {src} can reach satellite {sat_name}")
-        
-        return None
+    def get_path(self, graph, src: str, dst: str) -> List[str]:
+        if src == dst:
+            return []
+
+        path = self._find_shortest_path(graph, src, dst)
+        if path:
+            return path
+
+        path = self._find_path_via_single_satellite(graph, src, dst)
+        if path:
+            return path
+
+        path = self._emergency_three_hop_path(graph, src, dst)
+        if path:
+            return path
+
+        return self._simple_fallback_path(graph, src, dst)
+
 # ==================== TCP Protocol Stack ====================
 
 class TCPProtocolStack:
@@ -995,413 +823,182 @@ class ChannelModel:
 
 # ==================== MAIN NETWORK MODULE ====================
 
-class EnhancedNetworkModule:
+class NetworkModule:
     """Complete network module with TCP/IP, routing, and congestion control"""
     
     def __init__(self, sim_manager):
+        #External References
         self.sim = sim_manager
-        self.core = sim_manager.core if hasattr(sim_manager, 'core') else None
-        self.topology = getattr(sim_manager, 'topology', None)
-        
-        # Core components
-        self.protocol_stacks: Dict[str, TCPProtocolStack] = {}
+        self.core = sim_manager.core
+        self.topology = sim_manager.topology
+
+        #Routing
         self.router = TopologyRouter(self)
-        self.queues: Dict[Tuple[str, str], NetworkQueue] = {}
-        self.channels: Dict[Tuple[str, str], ChannelModel] = {}
+
+        #TCP stacks per node
+        self.protocol_stacks = {}
         
         # Statistics
-        self.stats = {
-            'total_packets_sent': 0,
-            'total_packets_received': 0,
-            'total_packets_dropped': 0,
-            'total_bytes_transferred': 0,
-            'avg_latency_ms': 0.0,
-            'avg_hops': 0.0,
-            'packet_loss_rate': 0.0,
-            'throughput_bps': 0.0,
-            'tcp_connections': 0,
-            'tcp_retransmissions': 0,
-            'queue_drops': 0,
-            'routing_failures': 0,
-        }
-        
-        # Tracking
-        self.packet_tracker: Dict[int, Dict] = {}
-        self.start_time = time.time()
-        self.debug = True
-        
-        print("[NETWORK] Enhanced TCP/IP network module initialized")
-        
-        # Initialize protocol stacks for all nodes
-        self._initialize_protocol_stacks()
+        self.total_packets_sent = 0
+        self.total_packets_received = 0
+        self.total_bytes_transferred = 0
+        self.tcp_retransmission = 0
     
-    def _initialize_protocol_stacks(self):
-        """Initialize protocol stacks for all nodes"""
-        # Ground stations
-        for gs_name in [gs[0] for gs in GROUND_STATIONS]:
-            self._get_protocol_stack(gs_name)
-            print(f"[NETWORK] Initialized protocol stack for {gs_name}")
-        
-        # Satellites
-        if self.topology and hasattr(self.topology, 'nodes'):
-            for node in self.topology.nodes:
-                sat_name = node.sat.name
-                self._get_protocol_stack(sat_name)
-    
-    def send_tcp_packet(self, src: str, dst: str, 
-                        src_port: int, dst_port: int,
-                        data: bytes, current_time: float) -> bool:
-        """Send TCP data from src to dst - WITH SELF-TO-SELF PREVENTION"""
-        
-        # CRITICAL FIX: Prevent self-to-self at the TCP layer
+    def send_tcp_packet(
+        self,
+        src: str,
+        dst: str,
+        src_port: int,
+        dst_port: int,
+        data: bytes,
+        current_time: float,
+    ) -> bool:
+        """
+        TrafficModule → TCP → Network entry point
+        """
         if src == dst:
-            if self.debug:
-                print(f"[TCP ERROR] Self-to-self prevented: {src} → {dst}")
-            return False  # DON'T EVEN TRY TO SEND
-        
-        try:
-            src_stack = self._get_protocol_stack(src)
-            
-            # Get or create connection
-            conn = src_stack.establish_connection(src, dst, src_port, dst_port)
-            
-            # DEBUG: Log connection state
-            if self.debug:
-                print(f"[TCP DEBUG] {src}: Connection state: {conn.state.name}, cwnd: {conn.cwnd}")
-            
-            # If connection is not yet established, initiate handshake
-            if conn.state == ConnectionState.CLOSED:
-                # Send SYN to initiate connection
-                syn_packet = src_stack.send_syn(conn, current_time)
-                if syn_packet:  # Only send if packet was created
-                    self._send_packet_internal(syn_packet, current_time)
-                    # Update statistics
-                    self.stats['tcp_connections'] += 1
-                    if self.debug:
-                        print(f"[TCP] {src}: Sending SYN to {dst}:{dst_port}")
-                    return True
-                else:
-                    return False
-            
-            # If SYN sent but not yet acknowledged
-            elif conn.state == ConnectionState.SYN_SENT:
-                # Check if SYN timed out
-                if current_time - conn.syn_sent_time > conn.rto:
-                    if conn.syn_sent_time > 0:  # Only retry if we've sent before
-                        if self.debug:
-                            print(f"[TCP] {src}: SYN timeout to {dst}, resending")
-                        syn_packet = src_stack.send_syn(conn, current_time)
-                        if syn_packet:
-                            self._send_packet_internal(syn_packet, current_time)
-                return False
-            
-            # If connection is established, send data
-            elif conn.state == ConnectionState.ESTABLISHED:
-                # Only send if congestion window allows
-                if conn.cwnd > 0:
-                    packets = src_stack.send_data(conn, data, current_time)
-                    if packets:
-                        for packet in packets:
-                            self._send_packet_internal(packet, current_time)
-                        if self.debug:
-                            print(f"[TCP] {src}: Sent {len(packets)} data packets to {dst}")
-                        return True
-                    else:
-                        if self.debug:
-                            print(f"[TCP] {src}: No data packets generated (cwnd={conn.cwnd})")
-                else:
-                    if self.debug:
-                        print(f"[TCP] {src}: Congestion window is zero")
-                return False
-            
-            # If waiting for SYN-ACK or in other states
-            else:
-                if self.debug:
-                    print(f"[TCP] {src}: Connection in state {conn.state.name}, not sending data")
-                return False
-                
-        except Exception as e:
-            if self.debug:
-                print(f"[TCP] Send error: {e}")
             return False
-        
-    def _validate_packet(self, packet: ProtocolPacket) -> bool:
-        """Validate packet before sending - ULTRA STRICT"""
-        # 1. Prevent self-to-self AT ALL COSTS
-        if packet.src == packet.dst:
-            if self.debug:
-                print(f"[VALIDATION CRITICAL] Self-to-self BLOCKED: {packet.src} → {packet.dst}")
-                print(f"  Creation time: {packet.creation_time}")
-                print(f"  Flags: {packet.flags}")
-                print(f"  Path so far: {packet.path}")
-                
-                # Check if this is a SYN packet (connection initiation)
-                if packet.flags.get('SYN', False):
-                    print(f"  ⚠️  SYN packet trying to go to itself!")
-            return False
-        
-        # 2. Ensure source and destination are valid nodes
-        valid_nodes = ["GS_INDIA", "GS_USA", "GS_BRAZIL", "GS_AUSTRALIA", "NP", "SP"]
-        
-        # Add satellite names if topology exists
-        if self.topology and hasattr(self.topology, 'nodes'):
-            valid_nodes.extend([n.sat.name for n in self.topology.nodes])
-        
-        if packet.src not in valid_nodes:
-            if self.debug:
-                print(f"[VALIDATION FAILED] Invalid source: {packet.src}")
-            return False
-        
-        if packet.dst not in valid_nodes:
-            if self.debug:
-                print(f"[VALIDATION FAILED] Invalid destination: {packet.dst}")
-            return False
-        
-        # 3. Ensure destination is reachable (not same as current node unless it's the final destination)
-        if packet.current_node == packet.dst and packet.current_node != packet.src:
-            # This is OK - packet reached destination
+
+        stack = self._get_protocol_stack(src)
+
+        conn = stack.establish_connection(src, dst, src_port, dst_port)
+
+        # Handshake
+        if conn.state == ConnectionState.CLOSED:
+            syn = stack.send_syn(conn, current_time)
+            if syn:
+                self._schedule_forward(syn, current_time)
             return True
+
+        # Data transfer
+        if conn.state == ConnectionState.ESTABLISHED:
+            packets = stack.send_data(conn, data, current_time)
+            for pkt in packets:
+                self._schedule_forward(pkt, current_time)
+            return bool(packets)
+
+        return False
         
-        # 4. Validate ports
-        if packet.src_port < 0 or packet.src_port > 65535:
-            return False
-        if packet.dst_port < 0 or packet.dst_port > 65535:
-            return False
-        
-        return True
-    
-    def _send_packet_internal(self, packet: ProtocolPacket, current_time: float):
-        """Internal method to send packet through network - ULTRA STRICT"""
-        
-        # ULTRA CRITICAL: Block self-to-self IMMEDIATELY
-        if packet.src == packet.dst:
-            if self.debug:
-                print(f"[NETWORK NUKED] 💥 Self-to-self packet ANNIHILATED!")
-                print(f"  Source/Dest: {packet.src}")
-                print(f"  Creation: {packet.creation_time}")
-                print(f"  Current: {current_time}")
-                print(f"  Age: {current_time - packet.creation_time:.3f}s")
-                print(f"  Flags: {packet.flags}")
-                print(f"  Path: {' → '.join(packet.path) if packet.path else 'None'}")
-                print(f"  TTL: {packet.ttl}")
-                
-                # Check what type of packet this is
-                if packet.flags.get('SYN', False):
-                    print(f"  🚨 This is a SYN packet!")
-                elif packet.flags.get('ACK', False):
-                    print(f"  🚨 This is an ACK packet!")
-                elif packet.data:
-                    print(f"  🚨 This is a DATA packet ({len(packet.data)} bytes)")
-            
-            # Don't even count it - just vaporize it
-            return
-        
-        # Standard validation
-        if not self._validate_packet(packet):
-            self.stats['total_packets_dropped'] += 1
-            self.stats['routing_failures'] += 1
-            return
-        
-        self.stats['total_packets_sent'] += 1
-        
-        if self.debug and packet.flags.get('SYN', False):
-            print(f"[SEND] {packet.src}:{packet.src_port} → {packet.dst}:{packet.dst_port} SYN")
-        
-        # Get next hop
-        next_hop = self.router.get_next_hop(packet.current_node, packet.dst, current_time)
-        
+    #Event Scheduling
+
+    def _schedule_forward(self, packet: ProtocolPacket, current_time: float):
+        """
+        Schedule next-hop arrival via scheduler
+        """
+        next_hop, delay = self._compute_next_hop(packet, current_time)
+
         if not next_hop:
-            self.stats['total_packets_dropped'] += 1
-            self.stats['routing_failures'] += 1
-            
-            # Log specifically for self-to-self routing attempts
-            if packet.src == packet.dst:
-                if self.debug:
-                    print(f"[ROUTER IMPOSSIBLE] Attempted to route self-to-self: {packet.src}")
-            else:
-                if self.debug:
-                    print(f"[NETWORK] No route from {packet.current_node} to {packet.dst}")
             return
-        
-        # Get queue for this link
-        queue_key = (packet.current_node, next_hop)
-        queue = self._get_queue(queue_key)
-        
-        # Enqueue packet
-        if not queue.enqueue(packet):
-            self.stats['total_packets_dropped'] += 1
-            self.stats['queue_drops'] += 1
-            if self.debug:
-                print(f"[NETWORK] Queue full {packet.current_node}→{next_hop}")
-            return
-        
-        # Process queue immediately
-        self._process_queue(queue_key, current_time)
-    
-    def _process_queue(self, queue_key: Tuple[str, str], current_time: float):
-        """Process packets in a queue"""
-        queue = self.queues.get(queue_key)
-        if not queue or queue.is_empty():
-            return
-        
-        # Get next packet
-        packet = queue.dequeue()
-        if not packet:
-            return
-        
-        src, dst = queue_key
-        
-        # Calculate transmission delay
-        channel = self._get_channel(src, dst)
-        distance_km = 1500  # Approximate LEO distance
-        delay = channel.calculate_delay(packet, distance_km)
-        
-        # Schedule arrival
+
         arrival_time = current_time + delay
-        
-        if self.core and hasattr(self.core, 'schedule'):
-            self.core.schedule(
-                arrival_time,
-                1,
-                self._handle_packet_arrival,
-                packet,
-                src,
-                dst,
-                current_time
-            )
-        else:
-            # Direct call if no scheduler
-            self._handle_packet_arrival(arrival_time, packet, src, dst, current_time)
-    
-    def _handle_packet_arrival(self, arrival_time: float, packet: ProtocolPacket,
-                              from_node: str, at_node: str, send_time: float):
-        """Handle packet arrival at a node"""
-        packet.move_to_node(at_node)
-        
-        # Check TTL
+
+        self.total_packets_sent += 1
+        self.total_bytes_transferred += packet.data_length
+
+        self.core.schedule(
+            arrival_time,
+            1,
+            self._packet_arrival_event,
+            packet,
+            next_hop,
+        )
+
+    def _packet_arrival_event(
+        self,
+        current_time: float,
+        packet: ProtocolPacket,
+        node: str,
+    ):
+        """
+        Scheduler callback when packet reaches a node
+        """
+        packet.move_to_node(node)
+
         if not packet.decrement_ttl():
-            self.stats['total_packets_dropped'] += 1
-            if self.debug:
-                print(f"[NETWORK] TTL expired for packet from {packet.src}")
             return
-        
-        # Check if destination reached
-        if at_node == packet.dst:
-            self._deliver_packet(packet, arrival_time, send_time)
-        else:
-            # Continue forwarding
-            self._send_packet_internal(packet, arrival_time)
-    
-    def _deliver_packet(self, packet: ProtocolPacket, delivery_time: float, 
-                    send_time: float):
-        """Deliver packet to final destination"""
-        packet.delivered = True
-        packet.delivery_time = delivery_time
-        
-        # Calculate latency
-        latency = delivery_time - send_time
-        
-        # Update statistics
-        self.stats['total_packets_received'] += 1
-        self.stats['total_bytes_transferred'] += packet.data_length
-        
-        # Update averages
-        if self.stats['avg_latency_ms'] == 0:
-            self.stats['avg_latency_ms'] = latency * 1000
-        else:
-            self.stats['avg_latency_ms'] = 0.9 * self.stats['avg_latency_ms'] + 0.1 * (latency * 1000)
-        
-        if self.stats['avg_hops'] == 0:
-            self.stats['avg_hops'] = packet.hops
-        else:
-            self.stats['avg_hops'] = 0.9 * self.stats['avg_hops'] + 0.1 * packet.hops
-        
-        # Handle TCP packets
+
+        if node == packet.dst:
+            self._deliver_packet(packet, current_time)
+            return
+
+        self._schedule_forward(packet, current_time)
+
+    #Pure Routing
+    def _compute_next_hop(self, packet: ProtocolPacket, current_time: float):
+        sim_time = self.sim.get_sim_time(current_time)
+
+        path = self.router.find_path_with_fallback(
+            packet.current_node,
+            packet.dst,
+            current_time,
+        )
+
+        if not path or len(path) < 2:
+            return None, None
+
+        next_hop = path[1]
+        delay = self.topology.get_link_delay(
+            path[0],
+            next_hop,
+            sim_time,
+        )
+
+        return next_hop, delay
+
+    #Delivery and TCP Handoff
+    def _deliver_packet(self, packet: ProtocolPacket, current_time: float):
+        self.total_packets_received += 1
+
         if packet.protocol_type == ProtocolType.TCP:
-            self._handle_tcp_delivery(packet, delivery_time)
-        
-        # Record delivery
-        self.packet_tracker[id(packet)] = {
-            'src': packet.src,
-            'dst': packet.dst,
-            'latency_ms': latency * 1000,
-            'hops': packet.hops,
-            'path': packet.path.copy()
-        }
-        
-        if self.debug and packet.data and len(packet.data) > 0:
-            print(f"[DELIVERED] {packet.src} → {packet.dst} "
-                  f"({latency*1000:.1f}ms, {packet.hops} hops, {len(packet.data)} bytes)")
-    
-    def _handle_tcp_delivery(self, packet: ProtocolPacket, delivery_time: float):
-        """Handle TCP packet delivery - FIXED TO NOT DOUBLE COUNT"""
-        dst_stack = self._get_protocol_stack(packet.dst)
-        
-        # Process packet through TCP stack
-        response = dst_stack.receive_packet(packet, delivery_time)
-        
-        # IMPORTANT: Only notify for DATA packets (not ACK/SYN)
-        # Check if this is a DATA packet (has data AND is not just an ACK)
-        if packet.data and len(packet.data) > 0:
-            # This is a DATA packet
-            if hasattr(self.sim, 'traffic'):
-                # Only count if not already counted
-                if not getattr(packet, '_delivery_notified', False):
-                    packet._delivery_notified = True
-                    self.sim.traffic.on_packet_delivered(packet, delivery_time)
-        
-        # If this is an ACK packet, notify traffic module BUT DON'T COUNT AS DELIVERY
-        elif packet.flags.get('ACK', False):
-            if hasattr(self.sim, 'traffic'):
-                self.sim.traffic.on_ack_received(packet, delivery_time)
-        
-        # Send any response generated by TCP stack
+            self._handle_tcp_delivery(packet, current_time)
+
+    def _handle_tcp_delivery(self, packet: ProtocolPacket, current_time: float):
+        stack = self._get_protocol_stack(packet.dst)
+
+        response = stack.receive_packet(packet, current_time)
+
+        # Notify traffic module ONLY for data packets
+        if packet.data and hasattr(self.sim, "traffic"):
+            self.sim.traffic.on_packet_delivered(packet, current_time)
+
         if response:
-            self._send_packet_internal(response, delivery_time)
-    
+            self._schedule_forward(response, current_time)
+
+    #Network Maintenance
     def process_events(self, current_time: float):
-        """Process network events (retransmissions, etc.)"""
-        # Reset stuck connections every 10 seconds
-        if current_time % 10.0 < 0.1:  # Every ~10 seconds
-            for stack in self.protocol_stacks.values():
-                stack.reset_stuck_connections(current_time)
-        
-        # Check TCP timeouts
+        """
+        Called periodically by SimulationManager
+        Handles TCP retransmissions & timeouts
+        """
         for stack in self.protocol_stacks.values():
-            retransmit_packets = stack.check_timeouts(current_time)
-            for packet in retransmit_packets:
-                if packet:  # Only send if packet is valid
-                    self._send_packet_internal(packet, current_time)
-                    self.stats['tcp_retransmissions'] += 1
-        
-        # Process all queues
-        for queue_key in list(self.queues.keys()):
-            self._process_queue(queue_key, current_time)
-    
-    def get_statistics(self) -> Dict:
-        """Get current network statistics"""
-        sent = self.stats['total_packets_sent']
-        if sent > 0:
-            self.stats['packet_loss_rate'] = self.stats['total_packets_dropped'] / sent
-        
-        elapsed = time.time() - self.start_time
-        if elapsed > 0:
-            self.stats['throughput_bps'] = self.stats['total_bytes_transferred'] * 8 / elapsed
-        
-        return self.stats.copy()
-    
-    def _get_protocol_stack(self, node_name: str) -> TCPProtocolStack:
-        if node_name not in self.protocol_stacks:
-            self.protocol_stacks[node_name] = TCPProtocolStack(node_name)
-        return self.protocol_stacks[node_name]
-    
-    def _get_queue(self, key: Tuple[str, str]) -> NetworkQueue:
-        if key not in self.queues:
-            self.queues[key] = NetworkQueue(max_size=100)
-        return self.queues[key]
-    
-    def _get_channel(self, src: str, dst: str) -> ChannelModel:
-        key = (src, dst)
-        if key not in self.channels:
-            self.channels[key] = ChannelModel()
-        return self.channels[key]
+            retransmits = stack.check_timeouts(current_time)
+            for pkt in retransmits:
+                self.tcp_retransmissions += 1
+                self._schedule_forward(pkt, current_time)
+
+    #Helpers
+    def _get_protocol_stack(self, node: str) -> TCPProtocolStack:
+        if node not in self.protocol_stacks:
+            self.protocol_stacks[node] = TCPProtocolStack(node)
+        return self.protocol_stacks[node]
+
+    def get_statistics(self):
+        return {
+            "total_packets_sent": self.total_packets_sent,
+            "total_packets_received": self.total_packets_received,
+            "throughput_bps": (
+                self.total_bytes_transferred * 8
+                / max(self.core.current_time, 1e-6)
+            ),
+            "tcp_retransmissions": self.tcp_retransmissions,
+        }
+
+    #Statistics
+    def get_statistics(self):
+        return {
+            "total_packets_sent": self.total_packets_sent,
+            "total_packets_received": self.total_packets_received,
+            "throughput_bps": (
+                self.total_bytes_transferred * 8 / max(self.core.current_time, 1e-6)
+            ),
+        }
